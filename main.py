@@ -150,6 +150,13 @@ if page == "Predict Feedback":
                 help="How many people have reviewed this restaurant"
             )
 
+        st.markdown("---")
+        review_text = st.text_area(
+            "📝 Analyze Customer Review (Optional)",
+            placeholder="e.g. The food was fantastic and the ambiance was great, but the service was a bit slow.",
+            help="If provided, we will combine the sentiment of this review with the restaurant's overall details."
+        )
+
         submitted = st.form_submit_button("Predict Feedback", use_container_width=True, type="primary")
 
     # ---- Run prediction ----
@@ -176,9 +183,60 @@ if page == "Predict Feedback":
                     st.error(f"Prediction error: {e}")
                     st.stop()
 
+                if review_text.strip():
+                    import nltk
+                    try:
+                        nltk.data.find('sentiment/vader_lexicon.zip')
+                    except LookupError:
+                        nltk.download('vader_lexicon', quiet=True)
+                    
+                    from nltk.sentiment import SentimentIntensityAnalyzer
+                    sia = SentimentIntensityAnalyzer()
+                    scores = sia.polarity_scores(review_text)
+                    comp = scores['compound']
+                    
+                    vader_probs = {'Negative': 0.0, 'Moderate': 0.0, 'Positive': 0.0}
+                    if comp >= 0.05:
+                        vader_probs['Positive'] = comp * 100
+                        vader_probs['Moderate'] = (1 - comp) * 100
+                    elif comp <= -0.05:
+                        vader_probs['Negative'] = abs(comp) * 100
+                        vader_probs['Moderate'] = (1 - abs(comp)) * 100
+                    else:
+                        vader_probs['Moderate'] = 100.0
+                        
+                    # Blend probabilities (50/50 mix)
+                    for k in result['probabilities']:
+                        result['probabilities'][k] = (result['probabilities'][k] + vader_probs[k]) / 2.0
+                        
+                    # Normalize
+                    total = sum(result['probabilities'].values())
+                    for k in result['probabilities']:
+                        result['probabilities'][k] = (result['probabilities'][k] / total) * 100.0
+                        
+                    # Update label based on combined probabilities
+                    new_label = max(result['probabilities'], key=result['probabilities'].get)
+                    
+                    border_colors = {'Negative': '#E24B4A', 'Moderate': '#F9CB42', 'Positive': '#1D9E75'}
+                    emojis = {'Negative': '😞', 'Moderate': '😐', 'Positive': '😊'}
+                    desc = {
+                        'Negative': 'This restaurant is likely to receive poor customer feedback. Common issues include slow delivery, food quality, or pricing concerns.',
+                        'Moderate': 'This restaurant is likely to receive average feedback. Customers generally find it acceptable but nothing exceptional.',
+                        'Positive': 'This restaurant is likely to receive excellent customer feedback. Customers are generally very satisfied.'
+                    }
+                    
+                    result['label'] = new_label
+                    result['emoji'] = emojis[new_label]
+                    result['color'] = border_colors[new_label]
+                    result['description'] = desc[new_label]
+                    result['confidence'] = result['probabilities'][new_label]
+
             # ---- Result display ----
             st.markdown("---")
-            st.subheader("Prediction Result")
+            if review_text.strip():
+                st.subheader("Prediction Result (Including Review Sentiment)")
+            else:
+                st.subheader("Prediction Result")
 
             # Main result card
             label = result['label']
@@ -198,44 +256,12 @@ if page == "Predict Feedback":
             </div>
             """, unsafe_allow_html=True)
 
-            # Probability bars
-            st.markdown("#### Feedback probabilities")
-            probs = result['probabilities']
-            bar_colors = {'Negative': '#E24B4A', 'Moderate': '#F9CB42', 'Positive': '#1D9E75'}
-
-            for sent_label, prob in probs.items():
-                col_label, col_bar, col_pct = st.columns([1.5, 6, 1])
-                with col_label:
-                    st.markdown(f"**{sent_label}**")
-                with col_bar:
-                    st.progress(int(prob))
-                with col_pct:
-                    st.markdown(f"**{prob:.1f}%**")
-
-            # Donut chart
-            st.markdown("#### Probability breakdown")
-            fig, ax = plt.subplots(figsize=(4, 4))
-            sizes = [probs['Negative'], probs['Moderate'], probs['Positive']]
-            colors = ['#E24B4A', '#F9CB42', '#1D9E75']
-            wedges, texts, autotexts = ax.pie(
-                sizes, labels=['Negative', 'Moderate', 'Positive'],
-                colors=colors, autopct='%1.1f%%', startangle=90,
-                pctdistance=0.75, wedgeprops=dict(width=0.5, edgecolor='white', linewidth=2)
-            )
-            for at in autotexts:
-                at.set_fontsize(10)
-                at.set_fontweight('bold')
-            ax.set_title(f'Feedback breakdown\nfor "{name}"', fontweight='bold', pad=15)
-            ax.axis('equal')
-            st.pyplot(fig, use_container_width=False)
-            plt.close()
-
             # Input summary
             with st.expander("View input summary"):
-                summary_df = pd.DataFrame([{
-                    'Field': k,
-                    'Value': str(v)
-                } for k, v in input_data.items()])
+                summary_items = [{'Field': k, 'Value': str(v)} for k, v in input_data.items()]
+                if review_text.strip():
+                    summary_items.append({'Field': 'review_text', 'Value': review_text.strip()})
+                summary_df = pd.DataFrame(summary_items)
                 st.dataframe(summary_df, use_container_width=True, hide_index=True)
 
 # ============================================================
